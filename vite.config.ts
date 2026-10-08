@@ -5,6 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
@@ -17,6 +18,13 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      proxy: {
+        '/api/bangchak': {
+          target: 'https://oil-price.bangchak.co.th',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/api\/bangchak/, ''),
+        },
+      },
     },
   };
 });

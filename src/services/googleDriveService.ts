@@ -7,14 +7,29 @@ import {
   User,
   signOut,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const auth = getAuth(app);
+const defaultFirebaseConfig = {
+  projectId: "avid-wavelet-365901",
+  appId: "1:453619687220:web:b510ce9b1eaaa3a1de8f61",
+  apiKey: "AIzaSyA0RrB9xR3WpqmpLUBy0nrf9Oq-9XFyku8",
+  authDomain: "avid-wavelet-365901.firebaseapp.com",
+  storageBucket: "avid-wavelet-365901.firebasestorage.app",
+  messagingSenderId: "453619687220",
+  oAuthClientId: "453619687220-tiakv6vkq8jcl9mktdajff62voilmi83.apps.googleusercontent.com",
+};
 
-const provider = new GoogleAuthProvider();
-// Workspace Drive scope
-provider.addScope('https://www.googleapis.com/auth/drive.file');
+let app: any = null;
+let auth: any = null;
+let provider: any = null;
+
+try {
+  app = getApps().length > 0 ? getApp() : initializeApp(defaultFirebaseConfig);
+  auth = getAuth(app);
+  provider = new GoogleAuthProvider();
+  provider.addScope('https://www.googleapis.com/auth/drive.file');
+} catch (e) {
+  console.warn('Firebase initialization note (offline/preview fallback):', e);
+}
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
@@ -23,6 +38,10 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
+  if (!auth) {
+    if (onAuthFailure) onAuthFailure();
+    return () => {};
+  }
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user && cachedAccessToken) {
       if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
@@ -34,6 +53,9 @@ export const initAuth = (
 };
 
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  if (!auth || !provider) {
+    throw new Error('Google Authentication service is not initialized');
+  }
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
@@ -52,7 +74,9 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 };
 
 export const googleSignOut = async () => {
-  await signOut(auth);
+  if (auth) {
+    await signOut(auth);
+  }
   cachedAccessToken = null;
 };
 
@@ -95,7 +119,6 @@ export async function uploadExcelToGoogleDrive(
     'Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n' +
     'Content-Transfer-Encoding: base64\r\n\r\n';
 
-  // Convert Uint8Array to base64
   let binary = '';
   for (let i = 0; i < buffer.byteLength; i++) {
     binary += String.fromCharCode(buffer[i]);
