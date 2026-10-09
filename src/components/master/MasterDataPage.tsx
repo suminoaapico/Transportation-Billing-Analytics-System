@@ -16,14 +16,43 @@ import {
   TrendingUp,
   X,
   Layers,
+  Building2,
+  FileText,
+  Scale,
+  Sparkles,
+  Database,
+  UploadCloud,
+  Copy,
+  Check,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   RateCardTable,
   DieselPriceRecord,
   ZoneMappingRule,
   StandardTruckType,
+  QuotationSchema,
+  FixedDieselCustomer,
+  TruckTypeMappingRule,
+  FeeMasterItem,
+  ConditionRule,
 } from '../../types';
 import { fetchLiveOilPrices, LiveOilProduct } from '../../services/pttService';
+import { QuotationUploadModal } from '../quotation/QuotationUploadModal';
+import { TruckTypeMappingTab } from './TruckTypeMappingTab';
+import { FeeMasterTab } from './FeeMasterTab';
+import { ConditionRuleTab } from './ConditionRuleTab';
+import {
+  INITIAL_TRUCK_TYPE_MAPPINGS,
+  INITIAL_FEE_MASTER_ITEMS,
+  INITIAL_CONDITION_RULES,
+  INITIAL_RATE_CARD_4W,
+} from '../../data/seedData';
+import {
+  uploadAllRateCardsToSupabase,
+  generateRateCardsSqlScript,
+} from '../../services/supabaseService';
+import { parseRateCardRawText } from '../../services/masterImportParser';
 
 interface MasterDataPageProps {
   rateCards: { [key in StandardTruckType]: RateCardTable };
@@ -34,6 +63,17 @@ interface MasterDataPageProps {
   onUpdateZoneMappings: (newList: ZoneMappingRule[]) => void;
   onRefreshPTTPrice: () => Promise<void>;
   isRefreshingPTT: boolean;
+  quotations?: QuotationSchema[];
+  onUpdateQuotations?: (list: QuotationSchema[]) => void;
+  fixedCustomers?: FixedDieselCustomer[];
+  onUpdateFixedCustomers?: (list: FixedDieselCustomer[]) => void;
+  truckTypeMappings?: TruckTypeMappingRule[];
+  onUpdateTruckTypeMappings?: (mappings: TruckTypeMappingRule[]) => void;
+  feeMasterItems?: FeeMasterItem[];
+  onUpdateFeeMasterItems?: (items: FeeMasterItem[]) => void;
+  conditionRules?: ConditionRule[];
+  onUpdateConditionRules?: (rules: ConditionRule[]) => void;
+  initialTab?: 'diesel' | 'rateCard' | 'zone' | 'truckType' | 'feeMaster' | 'conditionRule' | 'quotation' | 'fixedContract';
 }
 
 export const MasterDataPage: React.FC<MasterDataPageProps> = ({
@@ -45,16 +85,71 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
   onUpdateZoneMappings,
   onRefreshPTTPrice,
   isRefreshingPTT,
+  quotations = [],
+  onUpdateQuotations,
+  fixedCustomers = [],
+  onUpdateFixedCustomers,
+  truckTypeMappings,
+  onUpdateTruckTypeMappings,
+  feeMasterItems,
+  onUpdateFeeMasterItems,
+  conditionRules,
+  onUpdateConditionRules,
+  initialTab,
 }) => {
-  const [activeTab, setActiveTab] = useState<'diesel' | 'rateCard' | 'zone'>('diesel');
+  const [activeTab, setActiveTab] = useState<
+    'diesel' | 'rateCard' | 'zone' | 'truckType' | 'feeMaster' | 'conditionRule' | 'quotation' | 'fixedContract'
+  >(initialTab || 'diesel');
+
+  // Internal states for Prompt 2 master datasets
+  const [internalTruckMappings, setInternalTruckMappings] = useState<TruckTypeMappingRule[]>(
+    truckTypeMappings || INITIAL_TRUCK_TYPE_MAPPINGS
+  );
+  const [internalFeeItems, setInternalFeeItems] = useState<FeeMasterItem[]>(
+    feeMasterItems || INITIAL_FEE_MASTER_ITEMS
+  );
+  const [internalConditions, setInternalConditions] = useState<ConditionRule[]>(
+    conditionRules || INITIAL_CONDITION_RULES
+  );
+
+  const currentTruckMappings = truckTypeMappings || internalTruckMappings;
+  const handleUpdateTruckMappings = (list: TruckTypeMappingRule[]) => {
+    if (onUpdateTruckTypeMappings) onUpdateTruckTypeMappings(list);
+    else setInternalTruckMappings(list);
+  };
+
+  const currentFeeItems = feeMasterItems || internalFeeItems;
+  const handleUpdateFeeItems = (list: FeeMasterItem[]) => {
+    if (onUpdateFeeMasterItems) onUpdateFeeMasterItems(list);
+    else setInternalFeeItems(list);
+  };
+
+  const currentConditions = conditionRules || internalConditions;
+  const handleUpdateConditions = (list: ConditionRule[]) => {
+    if (onUpdateConditionRules) onUpdateConditionRules(list);
+    else setInternalConditions(list);
+  };
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   const [selectedTruck, setSelectedTruck] = useState<StandardTruckType>('4W');
   const [selectedBracketKey, setSelectedBracketKey] = useState<string>('c_30_32');
+  const [isQuotationUploadOpen, setIsQuotationUploadOpen] = useState(false);
+
+  // Rate Card Supabase & Paste states
+  const [isSyncingRateCards, setIsSyncingRateCards] = useState(false);
+  const [rateCardSyncStatus, setRateCardSyncStatus] = useState<string | null>(null);
+  const [isPasteRateCardOpen, setIsPasteRateCardOpen] = useState(false);
+  const [pasteRateCardText, setPasteRateCardText] = useState('');
+  const [copiedRateCardSql, setCopiedRateCardSql] = useState(false);
 
   // Real-time API state
   const [liveProducts, setLiveProducts] = useState<LiveOilProduct[]>([]);
   const [liveRemark, setLiveRemark] = useState('');
   const [isLoadingLiveApi, setIsLoadingLiveApi] = useState(false);
-  const [showIframeWidget, setShowIframeWidget] = useState(true);
 
   // Diesel CRUD States
   const [searchDiesel, setSearchDiesel] = useState('');
@@ -63,7 +158,7 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
     return `${today.getDate()}/${today.getMonth() + 1}/${today.getFullYear()}`;
   });
   const [newDieselPrice, setNewDieselPrice] = useState('42.19');
-  const [newDieselSource, setNewDieselSource] = useState('Bangchak / PTT Live');
+  const [newDieselSource, setNewDieselSource] = useState('PTT Standard / Daily Live');
 
   // Diesel Edit Modal State
   const [editingDiesel, setEditingDiesel] = useState<DieselPriceRecord | null>(null);
@@ -74,6 +169,9 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
   // Rate Card cell edit state
   const [editingRateCell, setEditingRateCell] = useState<{ rowId: string; bracketKey: string } | null>(null);
   const [editingRateVal, setEditingRateVal] = useState('');
+  const [newLocationName, setNewLocationName] = useState('');
+  const [newProvinceName, setNewProvinceName] = useState('');
+  const [newBaseRate, setNewBaseRate] = useState('3200');
 
   // Zone Mapping Form State
   const [newZoneRaw, setNewZoneRaw] = useState('');
@@ -154,9 +252,7 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
 
   // 2. Delete Diesel Record
   const handleDeleteDiesel = (date: string) => {
-    if (window.confirm(`ยืนยันการลบข้อมูลราคาน้ำมันวันที่ "${date}" หรือไม่?`)) {
-      onUpdateDieselPrices(dieselPrices.filter((d) => d.date !== date));
-    }
+    onUpdateDieselPrices(dieselPrices.filter((d) => d.date !== date));
   };
 
   // 3. Edit Diesel Record
@@ -190,7 +286,57 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
   };
 
   // Rate card save
-  const currentTable = rateCards[selectedTruck];
+  const currentTable = rateCards[selectedTruck] || INITIAL_RATE_CARD_4W;
+
+  const handleSyncRateCardsToSupabase = async () => {
+    setIsSyncingRateCards(true);
+    setRateCardSyncStatus(null);
+    try {
+      const res = await uploadAllRateCardsToSupabase(rateCards);
+      if (res.success) {
+        setRateCardSyncStatus(`✅ บันทึก Rate Cards ครบทุกประเภทรถ (${res.truckTypesCount} ประเภท, ${res.flatRowsCount} รายการ) เข้า Supabase เรียบร้อยแล้ว!`);
+      } else {
+        setRateCardSyncStatus(`❌ เกิดข้อผิดพลาด: ${res.error}`);
+      }
+    } catch (err: any) {
+      setRateCardSyncStatus(`❌ บันทึกไม่สำเร็จ: ${err?.message || 'Error'}`);
+    } finally {
+      setIsSyncingRateCards(false);
+    }
+  };
+
+  const handleImportPastedRateCards = async () => {
+    if (!pasteRateCardText.trim()) return;
+    const parsed = parseRateCardRawText(pasteRateCardText);
+    if (parsed.flatRows.length === 0) {
+      alert('ไม่พบแถวข้อมูลอัตราค่าบริการที่ถูกต้อง กรุณาตรวจสอบข้อความที่วาง');
+      return;
+    }
+    const newCards = { ...rateCards };
+    for (const [tKey, table] of Object.entries(parsed.matrixUpdates)) {
+      if (table) {
+        newCards[tKey as StandardTruckType] = table;
+      }
+    }
+    onUpdateRateCards(newCards);
+    setIsSyncingRateCards(true);
+    const res = await uploadAllRateCardsToSupabase(newCards);
+    setIsSyncingRateCards(false);
+    setIsPasteRateCardOpen(false);
+    setPasteRateCardText('');
+    if (res.success) {
+      setRateCardSyncStatus(`✅ นำเข้าและบันทึก Rate Card เข้า Supabase สำเร็จ ${parsed.flatRows.length} รายการ!`);
+    } else {
+      setRateCardSyncStatus(`⚠️ อัปเดตในระบบแล้ว แต่บันทึกเข้า Supabase ติดปัญหา: ${res.error}`);
+    }
+  };
+
+  const handleCopyRateCardSql = () => {
+    const sql = generateRateCardsSqlScript(rateCards);
+    navigator.clipboard.writeText(sql);
+    setCopiedRateCardSql(true);
+    setTimeout(() => setCopiedRateCardSql(false), 2500);
+  };
 
   const handleSaveRateCell = (rowId: string, bracketKey: string, val: number) => {
     const updatedRows = currentTable.rows.map((r) => {
@@ -216,20 +362,85 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
     setEditingRateCell(null);
   };
 
+  // Add Rate Card Row
+  const handleAddRateCardRow = () => {
+    if (!newLocationName.trim()) return;
+    const base = parseFloat(newBaseRate) || 3000;
+    const newRates: { [bracketKey: string]: number } = {};
+    currentTable.brackets.forEach((b, idx) => {
+      newRates[b.key] = Math.round(base + idx * 120);
+    });
+
+    const newRow = {
+      id: `rc-${selectedTruck}-${Date.now()}`,
+      location: newLocationName.trim(),
+      province: newProvinceName.trim() || 'Central',
+      rates: newRates,
+    };
+
+    onUpdateRateCards({
+      ...rateCards,
+      [selectedTruck]: {
+        ...currentTable,
+        rows: [newRow, ...currentTable.rows],
+      },
+    });
+
+    setNewLocationName('');
+    setNewProvinceName('');
+  };
+
+  // Delete Rate Card Row
+  const handleDeleteRateCardRow = (rowId: string) => {
+    onUpdateRateCards({
+      ...rateCards,
+      [selectedTruck]: {
+        ...currentTable,
+        rows: currentTable.rows.filter((r) => r.id !== rowId),
+      },
+    });
+  };
+
   // Zone Mapping CRUD
   const handleAddZoneMapping = () => {
     if (!newZoneRaw || !newZoneTarget) return;
-    const newRule: ZoneMappingRule = {
-      id: `zm-${Date.now()}`,
-      rawZoneKeyword: newZoneRaw.trim(),
-      provinceKeyword: newZoneProv.trim() || undefined,
-      matchedLocation: newZoneTarget.trim(),
-    };
 
-    onUpdateZoneMappings([newRule, ...zoneMappings]);
+    if (editingZoneRule) {
+      // Update existing
+      const updated = zoneMappings.map((z) => {
+        if (z.id === editingZoneRule.id) {
+          return {
+            ...z,
+            rawZoneKeyword: newZoneRaw.trim(),
+            provinceKeyword: newZoneProv.trim() || undefined,
+            matchedLocation: newZoneTarget.trim(),
+          };
+        }
+        return z;
+      });
+      onUpdateZoneMappings(updated);
+      setEditingZoneRule(null);
+    } else {
+      // Create new
+      const newRule: ZoneMappingRule = {
+        id: `zm-${Date.now()}`,
+        rawZoneKeyword: newZoneRaw.trim(),
+        provinceKeyword: newZoneProv.trim() || undefined,
+        matchedLocation: newZoneTarget.trim(),
+      };
+      onUpdateZoneMappings([newRule, ...zoneMappings]);
+    }
+
     setNewZoneRaw('');
     setNewZoneProv('');
     setNewZoneTarget('');
+  };
+
+  const handleStartEditZone = (rule: ZoneMappingRule) => {
+    setEditingZoneRule(rule);
+    setNewZoneRaw(rule.rawZoneKeyword);
+    setNewZoneProv(rule.provinceKeyword || '');
+    setNewZoneTarget(rule.matchedLocation);
   };
 
   const handleDeleteZoneMapping = (id: string) => {
@@ -256,57 +467,117 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
           </div>
           <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
             <Settings className="w-5 h-5 text-blue-600" />
-            จัดการข้อมูลหลักของระบบ (Master Data Management)
+            จัดการข้อมูลหลักของระบบ (Master Data Management - Prompt 2)
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            ดึงราคา API เรียลไทม์ พร้อมช่องราคาน้ำมันบางจาก (iFrame), เพิ่ม ลบ แก้ไข ข้อมูลราคาน้ำมัน, Rate Card และโซนปลายทาง
+            จัดการราคาน้ำมันมาตรฐาน ปตท. & เฉลี่ยรายเดือน (Monthly Average), Rate Card, กฎจับคู่โซน, ประเภทรถ (Truck Mapping), ค่าใช้จ่าย (Fees) และเงื่อนไขการคิดเงิน (Conditions)
           </p>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-200 dark:border-slate-700 text-xs font-semibold">
+      <div className="flex flex-wrap border-b border-slate-200 dark:border-slate-700 text-xs font-semibold gap-1">
         <button
           onClick={() => setActiveTab('diesel')}
-          className={`pb-3 px-5 border-b-2 transition-all flex items-center gap-2 ${
+          className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-1.5 ${
             activeTab === 'diesel'
               ? 'border-blue-600 text-blue-600 dark:text-blue-400'
               : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
           }`}
         >
           <Fuel className="w-4 h-4" />
-          <span>⛽ ราคาน้ำมันเรียลไทม์ & ฐานข้อมูลดีเซล ({dieselPrices.length})</span>
+          <span>⛽ ราคาน้ำมัน & ดีเซล ({dieselPrices.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('rateCard')}
-          className={`pb-3 px-5 border-b-2 transition-all flex items-center gap-2 ${
+          className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-1.5 ${
             activeTab === 'rateCard'
               ? 'border-blue-600 text-blue-600 dark:text-blue-400'
               : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
           }`}
         >
           <Truck className="w-4 h-4" />
-          <span>Rate Card (4W / 6W / 10W)</span>
+          <span>Rate Card (4W/6W/10W)</span>
         </button>
 
         <button
           onClick={() => setActiveTab('zone')}
-          className={`pb-3 px-5 border-b-2 transition-all flex items-center gap-2 ${
+          className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-1.5 ${
             activeTab === 'zone'
               ? 'border-blue-600 text-blue-600 dark:text-blue-400'
               : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
           }`}
         >
           <MapPin className="w-4 h-4" />
-          <span>กฎการจับคู่โซน (Zone Mapping) ({zoneMappings.length})</span>
+          <span>จับคู่โซน ({zoneMappings.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('truckType')}
+          className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-1.5 ${
+            activeTab === 'truckType'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          }`}
+        >
+          <Truck className="w-4 h-4 text-indigo-500" />
+          <span>🚛 ประเภทรถ (Truck Type) ({currentTruckMappings.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('feeMaster')}
+          className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-1.5 ${
+            activeTab === 'feeMaster'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          }`}
+        >
+          <Scale className="w-4 h-4 text-emerald-500" />
+          <span>💰 ค่าใช้จ่าย (Fees) ({currentFeeItems.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('conditionRule')}
+          className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-1.5 ${
+            activeTab === 'conditionRule'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          }`}
+        >
+          <Settings className="w-4 h-4 text-purple-500" />
+          <span>⚙️ เงื่อนไข (Conditions) ({currentConditions.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('quotation')}
+          className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-1.5 ${
+            activeTab === 'quotation'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          <span>ใบเสนอราคา ({quotations.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('fixedContract')}
+          className={`pb-3 px-4 border-b-2 transition-all flex items-center gap-1.5 ${
+            activeTab === 'fixedContract'
+              ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+              : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+          }`}
+        >
+          <Building2 className="w-4 h-4" />
+          <span>เรทคงที่ ({fixedCustomers.length})</span>
         </button>
       </div>
 
       {/* TAB 1: DIESEL REAL-TIME & CRUD */}
       {activeTab === 'diesel' && (
         <div className="space-y-6">
-          {/* Real-time Bangchak API & Widgets Section */}
+          {/* PTT Standard API Section (Cleaned up, no Bangchak / no iframe) */}
           <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
@@ -315,13 +586,13 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                    ราคาน้ำมันเรียลไทม์ (Live Bangchak & PTT Oil Price API)
+                    ราคาน้ำมันมาตรฐาน & ฐานข้อมูลดีเซล (PTT Standard Diesel & Daily Prices)
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
                       LIVE ONLINE
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {liveRemark || 'ดึงราคาขายปลีกมาตรฐาน กทม. และปริมณฑล'}
+                    {liveRemark || 'ดึงราคาขายปลีกมาตรฐาน ปตท. กทม. และปริมณฑล'}
                   </p>
                 </div>
               </div>
@@ -334,17 +605,6 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLiveApi ? 'animate-spin' : ''}`} />
                   ดึงราคา API สด
-                </button>
-                <button
-                  onClick={() => setShowIframeWidget(!showIframeWidget)}
-                  className={`px-3.5 py-1.5 border rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                    showIframeWidget
-                      ? 'bg-amber-50 dark:bg-amber-950 border-amber-300 text-amber-800 dark:text-amber-200'
-                      : 'border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300'
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  {showIframeWidget ? 'ซ่อนวิดเจ็ต iframe' : 'แสดงช่องราคาน้ำมัน (iframe)'}
                 </button>
               </div>
             </div>
@@ -399,59 +659,31 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
             </div>
           </div>
 
-          {/* Embedded Official Bangchak Widget (As explicitly requested by user) */}
-          {showIframeWidget && (
-            <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-3">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-700">
-                <div className="flex items-center gap-2">
-                  <ExternalLink className="w-4 h-4 text-emerald-600" />
-                  <h4 className="text-xs font-bold text-slate-800 dark:text-white">
-                    ช่องราคาน้ำมันเรียลไทม์ (Bangchak Official Widget IFrame)
-                  </h4>
-                </div>
-                <span className="text-[11px] text-slate-400">
-                  https://oil-price.bangchak.co.th/BcpOilPrice1/th
+          {/* Monthly Average Diesel Calculation Card (Requirement A) */}
+          <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 dark:from-slate-800 dark:via-slate-800/90 dark:to-slate-800 p-5 rounded-xl border border-blue-200 dark:border-blue-900 shadow-xs space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-600 text-white uppercase tracking-wider">
+                  MONTHLY AVERAGE DIESEL LOGIC (แก้ปัญหา Diff)
                 </span>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white mt-1 flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-emerald-600" />
+                  การคำนวณราคาน้ำมันเฉลี่ยทั้งเดือน (Monthly Average): 40.69 บาท/ลิตร
+                </h4>
+                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 leading-relaxed">
+                  ✅ <strong>Logic ที่ถูกต้อง:</strong> คำนวณ Average ราคาน้ำมัน ปตท. ของทั้งเดือน (1-30 ก.ย. 2026: 38.39, ..., 41.44 บาท)
+                  <br />
+                  Average กันยายน = (ผลรวมราคาทั้งเดือน) / (จำนวน 30 วัน) = <strong>40.69 บาท/ลิตร</strong> นำมาใช้เป็น Diesel Rate เพื่อความแม่นยำ ไม่เกิดปัญหา Diff กับลูกค้า
+                </p>
               </div>
 
-              <div className="flex flex-col lg:flex-row items-center justify-center gap-6 py-2 bg-slate-50 dark:bg-slate-900/50 rounded-xl p-4">
-                <div className="shadow-lg rounded-xl overflow-hidden border border-slate-300 dark:border-slate-700 bg-white">
-                  {/* Exact iframe requested by user */}
-                  <iframe
-                    width="320"
-                    height="875"
-                    src="https://oil-price.bangchak.co.th/BcpOilPrice1/th"
-                    frameBorder="0"
-                    title="Bangchak Oil Price Realtime"
-                    className="max-w-full"
-                  />
-                </div>
-
-                <div className="max-w-sm text-xs space-y-3 text-slate-600 dark:text-slate-300">
-                  <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl">
-                    <h5 className="font-bold text-emerald-900 dark:text-emerald-100 mb-1 flex items-center gap-1.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      เชื่อมต่อ Widget เรียลไทม์สำเร็จ
-                    </h5>
-                    <p className="text-[11px] text-emerald-800 dark:text-emerald-200 leading-relaxed">
-                      กล่องแสดงราคาน้ำมันด้านซ้ายดึงตรงจากเซิร์ฟเวอร์บางจากแบบเรียลไทม์
-                      สามารถดูราคาล่าสุดและกดปุ่มด้านบนเพื่อบันทึกราคาดีเซลเข้าสู่ฐานข้อมูลระบบได้ทันที
-                    </p>
-                  </div>
-
-                  <div className="p-4 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl">
-                    <h5 className="font-bold text-blue-900 dark:text-blue-100 mb-1">
-                      💡 คำแนะนำการใช้งาน
-                    </h5>
-                    <ul className="list-disc list-inside text-[11px] text-blue-800 dark:text-blue-200 space-y-1">
-                      <li>ระบบรองรับทั้งการดึงอัตโนมัติ และการกรอกราคาน้ำมันด้วยตนเอง</li>
-                      <li>สามารถแก้ไขและลบประวัติราคาน้ำมันย้อนหลังในตารางด้านล่างได้ตลอดเวลา</li>
-                    </ul>
-                  </div>
-                </div>
+              <div className="p-3 bg-white dark:bg-slate-700 rounded-xl border border-blue-200 dark:border-slate-600 text-center shrink-0">
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">ค่าเฉลี่ย ก.ย. 2026</span>
+                <span className="text-xl font-extrabold text-blue-600 dark:text-blue-400 font-mono">฿40.69</span>
+                <span className="text-[10px] text-slate-400 block">THB / ลิตร</span>
               </div>
             </div>
-          )}
+          </div>
 
           {/* DIESEL CRUD FORM: เพิ่มราคาน้ำมัน (Add New Record) */}
           <div className="bg-slate-50 dark:bg-slate-800/80 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-3">
@@ -668,12 +900,13 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
       {/* TAB 2: RATE CARDS */}
       {activeTab === 'rateCard' && (
         <div className="space-y-4">
-          <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
+          {/* RATE CARD TOP BAR */}
+          <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
                 เลือกประเภทรถ:
               </span>
-              {(['4W', '6W', '10W'] as StandardTruckType[]).map((t) => (
+              {(['4W', '6W', '10W', 'OD4', 'OD6'] as StandardTruckType[]).map((t) => (
                 <button
                   key={t}
                   onClick={() => setSelectedTruck(t)}
@@ -688,34 +921,120 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
               ))}
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
-                ไฮไลต์ช่วงน้ำมัน (Bracket B:Q):
-              </span>
-              <select
-                value={selectedBracketKey}
-                onChange={(e) => setSelectedBracketKey(e.target.value)}
-                className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white"
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-slate-500 dark:text-slate-400">ช่วงน้ำมัน:</span>
+                <select
+                  value={selectedBracketKey}
+                  onChange={(e) => setSelectedBracketKey(e.target.value)}
+                  className="px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white"
+                >
+                  {currentTable.brackets.map((b) => (
+                    <option key={b.key} value={b.key}>
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Action Buttons: Supabase Sync, Paste, Copy SQL */}
+              <button
+                onClick={handleSyncRateCardsToSupabase}
+                disabled={isSyncingRateCards}
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors disabled:opacity-50"
+                title="บันทึก Rate Card ทั้ง 5 ประเภทรถเข้า Supabase ทันที"
               >
-                {currentTable.brackets.map((b) => (
-                  <option key={b.key} value={b.key}>
-                    {b.label} บาท/ลิตร
-                  </option>
-                ))}
-              </select>
+                <UploadCloud className={`w-3.5 h-3.5 ${isSyncingRateCards ? 'animate-bounce' : ''}`} />
+                <span>{isSyncingRateCards ? 'กำลังบันทึกเข้า Supabase...' : '🚀 บันทึก Rate Cards ขึ้น Supabase'}</span>
+              </button>
+
+              <button
+                onClick={() => setIsPasteRateCardOpen(true)}
+                className="px-3 py-1.5 bg-blue-50 dark:bg-slate-700 border border-blue-200 dark:border-slate-600 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-slate-600 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                title="วางตาราง Rate Card เพื่อนำเข้าทันที"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>วางตาราง Rate Card</span>
+              </button>
+
+              <button
+                onClick={handleCopyRateCardSql}
+                className="px-3 py-1.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                title="คัดลอกคำสั่ง SQL Insert สำหรับนำไปรันใน Supabase SQL Editor"
+              >
+                {copiedRateCardSql ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedRateCardSql ? 'คัดลอก SQL แล้ว!' : 'คัดลอก SQL'}</span>
+              </button>
             </div>
           </div>
+
+          {/* Sync Status Banner */}
+          {rateCardSyncStatus && (
+            <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs text-emerald-900 dark:text-emerald-200 flex items-center justify-between gap-3 animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>{rateCardSyncStatus}</span>
+              </div>
+              <button
+                onClick={() => setRateCardSyncStatus(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs"
+              >
+                &times; ปิด
+              </button>
+            </div>
+          )}
 
           {selectedTruck === '4W' && (
             <div className="p-3.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 rounded-lg text-xs text-blue-900 dark:text-blue-200 flex items-center gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
               <span>
-                <strong>Logic พิเศษ:</strong> เมื่อ Truck Type = <strong>4W/Single Unit</strong> และ Zone ={' '}
-                <strong>Si Maha Phot, Prachinburi</strong> เรทช่วง 30.01-32.00 ถูกตั้งค่าไว้ที่{' '}
-                <span className="font-bold underline text-blue-700 dark:text-blue-300">3,280 บาท</span> ตามข้อกำหนด
+                <strong>มาตรฐาน Rate Card 4W (26 ปลายทาง):</strong> เมื่อ Truck Type = <strong>4W/Single Unit</strong> และ Zone ={' '}
+                <strong>Si Maha Phot, Prachinburi</strong> เรทช่วง 30.01-32.00 อยู่ที่{' '}
+                <span className="font-bold underline text-blue-700 dark:text-blue-300">3,280 บาท</span> | Navanakorn ={' '}
+                <span className="font-bold text-blue-700 dark:text-blue-300">950 บาท</span> | Warin Chamrap ={' '}
+                <span className="font-bold text-blue-700 dark:text-blue-300">13,450 บาท</span>
               </span>
             </div>
           )}
+
+          {/* ADD RATE CARD ROW FORM */}
+          <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+            <h4 className="font-semibold text-slate-800 dark:text-white mb-2 flex items-center gap-1.5">
+              <Plus className="w-4 h-4 text-blue-600" />
+              เพิ่มสถานที่ปลายทางใหม่ใน Rate Card (รถ {selectedTruck}):
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <input
+                type="text"
+                placeholder="ชื่อสถานที่ (เช่น Ban Pho, Chachoengsao)"
+                value={newLocationName}
+                onChange={(e) => setNewLocationName(e.target.value)}
+                className="px-3 py-1.5 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white"
+              />
+              <input
+                type="text"
+                placeholder="จังหวัด (เช่น ฉะเชิงเทรา)"
+                value={newProvinceName}
+                onChange={(e) => setNewProvinceName(e.target.value)}
+                className="px-3 py-1.5 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white"
+              />
+              <input
+                type="number"
+                placeholder="ราคาเริ่มต้น (Base THB เช่น 3200)"
+                value={newBaseRate}
+                onChange={(e) => setNewBaseRate(e.target.value)}
+                className="px-3 py-1.5 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white font-mono"
+              />
+              <button
+                onClick={handleAddRateCardRow}
+                disabled={!newLocationName.trim()}
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40"
+              >
+                <Plus className="w-4 h-4" />
+                เพิ่มสถานที่ใหม่
+              </button>
+            </div>
+          </div>
 
           <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden">
             <div className="overflow-x-auto">
@@ -812,16 +1131,25 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
                       })}
 
                       <td className="py-2 px-3 text-center">
-                        <button
-                          onClick={() => {
-                            setEditingRateCell({ rowId: row.id, bracketKey: selectedBracketKey });
-                            setEditingRateVal(String(row.rates[selectedBracketKey] || 0));
-                          }}
-                          className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
-                          title="แก้ไขราคาแถวนี้"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            onClick={() => {
+                              setEditingRateCell({ rowId: row.id, bracketKey: selectedBracketKey });
+                              setEditingRateVal(String(row.rates[selectedBracketKey] || 0));
+                            }}
+                            className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                            title="แก้ไขราคาแถวนี้"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteRateCardRow(row.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors"
+                            title="ลบสถานที่นี้ออกจาก Rate Card"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -846,9 +1174,24 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
           </div>
 
           <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-            <h4 className="font-semibold text-slate-800 dark:text-white mb-2 flex items-center gap-1.5">
-              <Plus className="w-4 h-4 text-blue-600" />
-              เพิ่มกฎการจับคู่โซนใหม่:
+            <h4 className="font-semibold text-slate-800 dark:text-white mb-2 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Plus className="w-4 h-4 text-blue-600" />
+                {editingZoneRule ? 'แก้ไขกฎการจับคู่โซน:' : 'เพิ่มกฎการจับคู่โซนใหม่:'}
+              </span>
+              {editingZoneRule && (
+                <button
+                  onClick={() => {
+                    setEditingZoneRule(null);
+                    setNewZoneRaw('');
+                    setNewZoneProv('');
+                    setNewZoneTarget('');
+                  }}
+                  className="text-rose-500 hover:underline text-[11px]"
+                >
+                  ยกเลิกการแก้ไข
+                </button>
+              )}
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <input
@@ -876,8 +1219,8 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
                 onClick={handleAddZoneMapping}
                 className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-1.5"
               >
-                <Plus className="w-4 h-4" />
-                เพิ่มกฎการจับคู่
+                {editingZoneRule ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                {editingZoneRule ? 'บันทึกการแก้ไข' : 'เพิ่มกฎการจับคู่'}
               </button>
             </div>
           </div>
@@ -910,18 +1253,337 @@ export const MasterDataPage: React.FC<MasterDataPageProps> = ({
                         {rule.matchedLocation}
                       </td>
                       <td className="py-2.5 px-4 text-center">
-                        <button
-                          onClick={() => handleDeleteZoneMapping(rule.id)}
-                          className="p-1 text-slate-400 hover:text-rose-500 rounded transition-colors"
-                          title="ลบกฎนี้"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => handleStartEditZone(rule)}
+                            className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                            title="แก้ไขกฎนี้"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteZoneMapping(rule.id)}
+                            className="p-1 text-slate-400 hover:text-rose-500 rounded transition-colors"
+                            title="ลบกฎนี้"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: QUOTATION MANAGEMENT */}
+      {activeTab === 'quotation' && (
+        <div className="space-y-6">
+          <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200">
+                  QUOTATION MASTER DATA
+                </span>
+                <span className="text-xs text-slate-400">ฐานข้อมูลใบเสนอราคา 100+ เจ้า</span>
+              </div>
+              <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                <FileText className="w-5 h-5 text-blue-600" />
+                จัดการใบเสนอราคา & โครงสร้างค่าบริการเพิ่มเติม
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                ระบบเชื่อมโยงใบเสนอราคากับ Job No./Trip No. โดยอัตโนมัติ พร้อมดึงค่าดรอป, ค่ารอ, ค่าทางด่วน, ค่าคนยก และเรทรถซับ OD
+              </p>
+            </div>
+
+            <button
+              onClick={() => setIsQuotationUploadOpen(true)}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-md shadow-blue-600/20 transition-all self-start sm:self-auto"
+            >
+              <Sparkles className="w-4 h-4" />
+              อัปโหลดใบเสนอราคา (AI OCR Parser)
+            </button>
+          </div>
+
+          {/* Quotation Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {quotations.map((q) => (
+              <div
+                key={q.id}
+                className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4 hover:border-blue-300 transition-colors"
+              >
+                {/* Header */}
+                <div className="flex items-start justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-700">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          q.branch === 'บางบ่อ'
+                            ? 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300'
+                            : 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                        }`}
+                      >
+                        สาขา{q.branch}
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        {q.effectiveDate} - {q.expiryDate}
+                      </span>
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-900 dark:text-white mt-1">
+                      {q.companyName}
+                    </h4>
+                  </div>
+
+                  {onUpdateQuotations && (
+                    <button
+                      onClick={() => onUpdateQuotations(quotations.filter((item) => item.id !== q.id))}
+                      className="p-1.5 text-slate-400 hover:text-rose-500 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      title="ลบใบเสนอราคานี้"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Base Rates per Truck Type */}
+                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="p-2 bg-slate-50 dark:bg-slate-700/40 rounded-lg border border-slate-200 dark:border-slate-600">
+                    <span className="block text-[10px] text-slate-400">รถ 4 ล้อ (4W)</span>
+                    <strong className="text-slate-800 dark:text-slate-200 font-mono">
+                      ฿{q.truckTypes['4W']?.baseRate.toLocaleString() || '-'}
+                    </strong>
+                  </div>
+                  <div className="p-2 bg-slate-50 dark:bg-slate-700/40 rounded-lg border border-slate-200 dark:border-slate-600">
+                    <span className="block text-[10px] text-slate-400">รถ 6 ล้อ (6W)</span>
+                    <strong className="text-slate-800 dark:text-slate-200 font-mono">
+                      ฿{q.truckTypes['6W']?.baseRate.toLocaleString() || '-'}
+                    </strong>
+                  </div>
+                  <div className="p-2 bg-slate-50 dark:bg-slate-700/40 rounded-lg border border-slate-200 dark:border-slate-600">
+                    <span className="block text-[10px] text-slate-400">รถ 10 ล้อ (10W)</span>
+                    <strong className="text-slate-800 dark:text-slate-200 font-mono">
+                      ฿{q.truckTypes['10W']?.baseRate.toLocaleString() || '-'}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Additional Fees Grid */}
+                <div className="p-3 bg-slate-50/70 dark:bg-slate-900/40 rounded-lg border border-slate-200/80 dark:border-slate-700 text-[11px] space-y-1.5">
+                  <span className="font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                    ค่าใช้จ่ายเพิ่มเติม (Additional Fees):
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-600 dark:text-slate-300">
+                    <div>ค่าดรอป: <strong>฿{q.additionalFees.dropFeePerPoint}</strong>/จุด</div>
+                    <div>ค่ารอโหลด: <strong>฿{q.additionalFees.waitingFeePerHour}</strong>/ชม.</div>
+                    <div>ทางด่วน: <strong>฿{q.additionalFees.toll}</strong></div>
+                    <div>Porter คนยก: <strong>฿{q.additionalFees.porter}</strong></div>
+                  </div>
+                </div>
+
+                {/* Special Conditions */}
+                {q.specialConditions && q.specialConditions.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {q.specialConditions.map((cond, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200 border border-amber-200 dark:border-amber-900"
+                      >
+                        ★ {cond}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: FIXED DIESEL CONTRACT CUSTOMERS */}
+      {activeTab === 'fixedContract' && (
+        <div className="space-y-6">
+          <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-200">
+                FIXED DIESEL RATE CONTRACTS
+              </span>
+              <span className="text-xs text-slate-400">ข้อยกเว้นการคำนวณตามราคาตลาด</span>
+            </div>
+            <h3 className="text-base font-bold text-slate-800 dark:text-white flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-purple-600" />
+              บริษัทที่ใช้เรทน้ำมันสัญญาคงที่ (Fixed Diesel Rate Master Data)
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              สำหรับบริษัทที่มีสัญญาเรทน้ำมันคงที่ เช่น <strong>SIEMENS</strong> (ใช้เรทน้ำมัน 38.00 บาท/ลิตร ตามสัญญา ไม่ผันแปรตามราคาตลาด)
+              ระบบจะใช้ตัวเลขนี้เป็น Diesel Rate ในการค้นหา Bracket ใน Rate Card โดยตรง
+            </p>
+          </div>
+
+          {/* List of Fixed Diesel Customers */}
+          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 dark:bg-slate-700/60 text-slate-700 dark:text-slate-200 font-semibold border-b border-slate-200 dark:border-slate-700">
+                  <tr>
+                    <th className="py-3 px-4">#</th>
+                    <th className="py-3 px-4">ชื่อบริษัท / ลูกค้าในสัญญา</th>
+                    <th className="py-3 px-4 text-center">เรทน้ำมันคงที่ (THB/L)</th>
+                    <th className="py-3 px-4">เงื่อนไขสัญญา</th>
+                    <th className="py-3 px-4 text-center">สถานะ</th>
+                    <th className="py-3 px-4 text-center">จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700 text-slate-700 dark:text-slate-300">
+                  {fixedCustomers.map((cust, idx) => (
+                    <tr key={cust.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                      <td className="py-3 px-4 font-mono text-slate-400">{idx + 1}</td>
+                      <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
+                        {cust.customerName}
+                      </td>
+                      <td className="py-3 px-4 text-center font-mono font-extrabold text-blue-600 dark:text-blue-400 text-sm">
+                        ฿{cust.fixedDieselRate.toFixed(2)}
+                      </td>
+                      <td className="py-3 px-4 text-slate-600 dark:text-slate-300">
+                        {cust.notes || 'ใช้เรทสัญญาคงที่ตามเงื่อนไขข้อตกลง'}
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                          Active (ใช้งาน)
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        {onUpdateFixedCustomers && (
+                          <button
+                            onClick={() => onUpdateFixedCustomers(fixedCustomers.filter((item) => item.id !== cust.id))}
+                            className="p-1 text-slate-400 hover:text-rose-500 rounded transition-colors"
+                            title="ลบบริษัทนี้"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: TRUCK TYPE MAPPING (Prompt 2.1) */}
+      {activeTab === 'truckType' && (
+        <TruckTypeMappingTab
+          mappings={currentTruckMappings}
+          onUpdateMappings={handleUpdateTruckMappings}
+        />
+      )}
+
+      {/* TAB: FEE MASTER (Prompt 2.2) */}
+      {activeTab === 'feeMaster' && (
+        <FeeMasterTab
+          feeItems={currentFeeItems}
+          onUpdateFeeItems={handleUpdateFeeItems}
+        />
+      )}
+
+      {/* TAB: CONDITION RULES (Prompt 2.3) */}
+      {activeTab === 'conditionRule' && (
+        <ConditionRuleTab
+          conditions={currentConditions}
+          onUpdateConditions={handleUpdateConditions}
+        />
+      )}
+
+      {/* Quotation Upload Modal */}
+      {isQuotationUploadOpen && (
+        <QuotationUploadModal
+          isOpen={isQuotationUploadOpen}
+          onClose={() => setIsQuotationUploadOpen(false)}
+          onSaveQuotation={(newQ) => {
+            if (onUpdateQuotations) {
+              onUpdateQuotations([newQ, ...quotations]);
+            }
+          }}
+        />
+      )}
+
+      {/* Paste Rate Card Modal */}
+      {isPasteRateCardOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-linear-to-r from-blue-600 to-indigo-700 text-white">
+              <div className="flex items-center gap-2.5">
+                <FileSpreadsheet className="w-5 h-5 text-white" />
+                <div>
+                  <h3 className="font-bold text-base">วางข้อความตาราง Rate Card (Paste Table Data)</h3>
+                  <p className="text-xs text-white/80">
+                    วางข้อความที่คัดลอกจาก Excel หรือจากตารางเรทราคาทั้ง 5 ประเภทรถ (4W, 6W, 10W, OD4, OD6)
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsPasteRateCardOpen(false)}
+                className="text-white/80 hover:text-white text-xl font-bold p-1 leading-none"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4 overflow-y-auto">
+              <div className="text-xs text-slate-600 dark:text-slate-300 bg-blue-50 dark:bg-blue-950/40 p-3 rounded-xl border border-blue-200 dark:border-blue-900 leading-relaxed">
+                💡 <strong>คำแนะนำ:</strong> สามารถคัดลอกข้อความตารางทั้งหมด (รวมหัวข้อประเภทรถ เช่น{' '}
+                <code>STANDARD RATE CARD - 4W TRUCK TYPE</code> และหัวคอลัมน์ช่วงน้ำมัน เช่น <code>lower than 30.00</code>,{' '}
+                <code>30.01-32.00</code>) แล้วนำมาวางในช่องด้านล่าง ระบบจะแยกประเภทรถและช่วงราคาพร้อมบันทึกเข้า Supabase ให้อัตโนมัติทันที
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  วางข้อความตารางที่นี่ (Ctrl+V / Cmd+V):
+                </label>
+                <textarea
+                  rows={12}
+                  value={pasteRateCardText}
+                  onChange={(e) => setPasteRateCardText(e.target.value)}
+                  placeholder={`ตัวอย่างเช่น:
+STANDARD RATE CARD - 4W TRUCK TYPE
+Delivery Location (Pickup: YNLC WH)	lower than 30.00	30.01-32.00	32.01-34.00...
+Navanakorn, Pathumtani	930	950	970...
+Rangsit, Pathumtani	1,240	1,270	1,300...
+
+STANDARD RATE CARD - 6W TRUCK TYPE
+...`}
+                  className="w-full font-mono text-xs p-3.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between">
+              <span className="text-xs text-slate-400">
+                {pasteRateCardText ? `${pasteRateCardText.split('\n').length} บรรทัด` : 'ยังไม่มีข้อมูล'}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsPasteRateCardOpen(false)}
+                  className="px-4 py-2 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  onClick={handleImportPastedRateCards}
+                  disabled={!pasteRateCardText.trim() || isSyncingRateCards}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition-colors"
+                >
+                  <UploadCloud className="w-4 h-4" />
+                  <span>{isSyncingRateCards ? 'กำลังนำเข้าและบันทึก...' : 'นำเข้าและบันทึกเข้า Supabase ทันที'}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

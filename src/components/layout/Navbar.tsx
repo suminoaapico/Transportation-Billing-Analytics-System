@@ -8,6 +8,8 @@ import {
   LogOut,
   ChevronDown,
   Search,
+  HardDrive,
+  Database,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 
@@ -23,6 +25,8 @@ interface NavbarProps {
   isRefreshingDiesel: boolean;
   globalSearch: string;
   setGlobalSearch: (val: string) => void;
+  onOpenDriveModal?: () => void;
+  onOpenSupabaseModal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -37,11 +41,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   isRefreshingDiesel,
   globalSearch,
   setGlobalSearch,
+  onOpenDriveModal,
+  onOpenSupabaseModal,
 }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
 
   return (
-    <header className="sticky top-0 z-30 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 h-16 flex items-center justify-between px-4 sm:px-6 shadow-xs transition-colors">
+    <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-700 h-16 flex items-center justify-between px-4 sm:px-6 shadow-xs transition-colors">
       {/* Left: Sidebar toggle & Title */}
       <div className="flex items-center gap-3">
         <button
@@ -55,7 +61,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="hidden sm:block">
           <h1 className="text-base font-bold text-slate-800 dark:text-slate-100 leading-tight flex items-center gap-2">
             <span>ระบบจัดการและวิเคราะห์ค่าขนส่ง</span>
-            <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300">
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300">
               AdminLTE 5
             </span>
           </h1>
@@ -80,21 +86,47 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       {/* Right Controls */}
-      <div className="flex items-center gap-2 sm:gap-3">
+      <div className="flex items-center gap-2 sm:gap-2.5">
+        {/* Supabase Cloud Database Button */}
+        {onOpenSupabaseModal && (
+          <button
+            onClick={onOpenSupabaseModal}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:hover:bg-emerald-900/60 border border-emerald-300 dark:border-emerald-800 rounded-lg text-emerald-800 dark:text-emerald-200 text-xs font-semibold transition-all shadow-xs"
+            title="เชื่อมต่อ Supabase Cloud Database & ดึง/ส่งข้อมูล"
+          >
+            <Database className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span className="hidden sm:inline">⚡ Supabase DB</span>
+            <span className="sm:hidden font-bold">DB</span>
+          </button>
+        )}
+
+        {/* Google Drive & Sample Files Button */}
+        {onOpenDriveModal && (
+          <button
+            onClick={onOpenDriveModal}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/50 dark:hover:bg-blue-900/60 border border-blue-300 dark:border-blue-800 rounded-lg text-blue-800 dark:text-blue-200 text-xs font-semibold transition-all shadow-xs"
+            title="เปิด Google Drive & ดาวน์โหลดไฟล์ตัวอย่าง"
+          >
+            <HardDrive className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+            <span className="hidden sm:inline">📁 Drive & ไฟล์ตัวอย่าง</span>
+            <span className="sm:hidden font-bold">Drive</span>
+          </button>
+        )}
+
         {/* PTT Diesel Price Badge */}
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-lg text-amber-900 dark:text-amber-200 text-xs">
+        <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-lg text-amber-900 dark:text-amber-200 text-xs">
           <Fuel className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-          <span className="hidden lg:inline text-[11px] font-medium text-slate-600 dark:text-slate-400">
-            ดีเซล PTT:
+          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+            ดีเซล:
           </span>
           <span className="font-bold text-amber-700 dark:text-amber-300">
-            {latestDieselPrice ? `${latestDieselPrice.toFixed(2)}` : '38.39'}
+            {latestDieselPrice ? `${latestDieselPrice.toFixed(2)}` : '42.19'}
           </span>
           <span className="text-[10px] text-slate-500 dark:text-slate-400">฿/L</span>
           <button
             onClick={onRefreshDiesel}
             disabled={isRefreshingDiesel}
-            title="อัปเดตราคาดีเซลล่าสุดจาก PTT (fetchPTTPrice)"
+            title="อัปเดตราคาดีเซลล่าสุดจาก PTT/Bangchak (fetchPTTPrice)"
             className="p-1 text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100 rounded transition-colors"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingDiesel ? 'animate-spin' : ''}`} />

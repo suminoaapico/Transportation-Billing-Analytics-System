@@ -16,9 +16,22 @@ import {
   Edit2,
   Save,
   SlidersHorizontal,
+  Plus,
+  Trash2,
+  Sparkles,
+  X,
+  Scale,
 } from 'lucide-react';
-import { CalculatedBillingTrip, BillingReportSummary, StandardTruckType, TruckSummary } from '../../types';
-import { exportBillingReportExcel } from '../../services/excelService';
+import {
+  CalculatedBillingTrip,
+  BillingReportSummary,
+  StandardTruckType,
+  TruckSummary,
+  RawTripData,
+  DiffStatus,
+} from '../../types';
+import { exportBillingReportExcel, downloadRawData69TemplateExcel } from '../../services/excelService';
+import { computeBillingSummary } from '../../services/billingCalculator';
 
 interface BillingReportPageProps {
   trips: CalculatedBillingTrip[];
@@ -30,10 +43,22 @@ interface BillingReportPageProps {
   onSelectBracket: (key: string) => void;
   onAutoResolveAll: () => void;
   onUpdateTripRate: (tripId: string, newRate: number) => void;
+  onAddNewTrip?: (trip: RawTripData) => void;
+  onDeleteTrip?: (tripId: string) => void;
+  onSimulateFullMonthTrips?: () => void;
+  onResetToSeedData?: () => void;
+  onOpenQuotationUpload?: () => void;
+  dieselMethod?: 'monthly_avg' | 'daily_spot';
+  onSelectDieselMethod?: (method: 'monthly_avg' | 'daily_spot') => void;
+  onClearTrips?: () => void;
+  onNavigateToReconciliation?: () => void;
+  onMapAllShippingQuotations100?: () => void;
+  onLoad20StandardTrips?: () => void;
 }
 
 export const BillingReportPage: React.FC<BillingReportPageProps> = ({
   trips,
+  summary,
   onOpenGoogleDriveModal,
   isDriveConnected,
   onGoogleSignIn,
@@ -41,12 +66,26 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
   onSelectBracket,
   onAutoResolveAll,
   onUpdateTripRate,
+  onAddNewTrip,
+  onDeleteTrip,
+  onSimulateFullMonthTrips,
+  onResetToSeedData,
+  onOpenQuotationUpload,
+  dieselMethod = 'monthly_avg',
+  onSelectDieselMethod,
+  onClearTrips,
+  onNavigateToReconciliation,
+  onMapAllShippingQuotations100,
+  onLoad20StandardTrips,
 }) => {
   // Filters
   const [filterStartDate, setFilterStartDate] = useState('');
   const [filterEndDate, setFilterEndDate] = useState('');
   const [filterCompany, setFilterCompany] = useState('ALL');
+  const [filterBranch, setFilterBranch] = useState('ALL');
   const [filterTruckType, setFilterTruckType] = useState<string>('ALL');
+  const [filterODType, setFilterODType] = useState('ALL');
+  const [filterDiff, setFilterDiff] = useState<'ALL' | 'Match' | 'MinorDiff' | 'MajorDiff'>('ALL');
   const [filterZone, setFilterZone] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -55,9 +94,60 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
   const [editingTripId, setEditingTripId] = useState<string | null>(null);
   const [editRateValue, setEditRateValue] = useState<string>('');
 
-  // Pagination
+  // Add Trip Modal State
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newJobNo, setNewJobNo] = useState('');
+  const [newTripNo, setNewTripNo] = useState('');
+  const [newIssueDate, setNewIssueDate] = useState(() => {
+    const today = new Date();
+    return `${today.getDate()}/${today.getMonth() + 1}/${today.getFullYear()}`;
+  });
+  const [newCompany, setNewCompany] = useState('AJITRADE (THAILAND) CO.,LTD.');
+  const [newDelivName, setNewDelivName] = useState('');
+  const [newDelivDistrict, setNewDelivDistrict] = useState('ศรีมหาโพธิ');
+  const [newDelivProvince, setNewDelivProvince] = useState('ปราจีนบุรี');
+  const [newTruckType, setNewTruckType] = useState('4W/Single Unit');
+  const [newStandardRate, setNewStandardRate] = useState('3280');
+
+  const handleSaveNewTrip = () => {
+    if (!newJobNo.trim()) return;
+    const rateVal = parseFloat(newStandardRate) || 0;
+    const newTripRaw: RawTripData = {
+      id: `trip-manual-${Date.now()}`,
+      issueDate: newIssueDate,
+      jobNo: newJobNo.trim(),
+      tripNo: newTripNo.trim() || `TRP-MANUAL-${Date.now().toString().slice(-5)}`,
+      consigneeShipper: newCompany.trim(),
+      pickUpName: 'YUSEN LOGISTICS (THAILAND) CO.,LTD (NLC)',
+      pickUpDistrict: 'คลองหลวง',
+      pickUpProvince: 'ปทุมธานี',
+      deliveryName: newDelivName.trim() || 'สถานที่จัดส่ง',
+      deliveryDistrict: newDelivDistrict.trim(),
+      deliveryProvince: newDelivProvince.trim(),
+      deliveryZone: newDelivDistrict.trim(),
+      truckType: newTruckType,
+      tripStatus: 'FinishTrip',
+      haulType: 'Direct',
+      backhaul: 'No',
+    };
+
+    if (onAddNewTrip) {
+      onAddNewTrip(newTripRaw);
+    }
+    if (rateVal > 0) {
+      onUpdateTripRate(newTripRaw.id, rateVal);
+    }
+
+    setIsAddModalOpen(false);
+    setNewJobNo('');
+    setNewTripNo('');
+    setNewDelivName('');
+  };
+
+  // Pagination (Supports viewing all items across all branches without pagination)
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 15;
+  const [pageSize, setPageSize] = useState<number>(15);
+  const [summaryViewTab, setSummaryViewTab] = useState<'both' | 'truck' | 'zone'>('both');
 
   // Options
   const companyOptions = useMemo(() => {
@@ -83,8 +173,20 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
       // Company
       if (filterCompany !== 'ALL' && t.consigneeShipper !== filterCompany) return false;
 
+      // Branch
+      if (filterBranch !== 'ALL' && t.branch !== filterBranch) return false;
+
       // Truck Type
       if (filterTruckType !== 'ALL' && t.standardTruckType !== filterTruckType) return false;
+
+      // OD Type
+      if (filterODType !== 'ALL') {
+        if (filterODType === 'Company Truck' && t.isSubContractor) return false;
+        if (filterODType !== 'Company Truck' && t.odType !== filterODType) return false;
+      }
+
+      // Diff Status
+      if (filterDiff !== 'ALL' && t.diffStatus !== filterDiff) return false;
 
       // Zone
       if (filterZone !== 'ALL' && t.zoneLocationMatch !== filterZone) return false;
@@ -95,51 +197,73 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
       // Keyword
       if (searchKeyword.trim()) {
         const q = searchKeyword.toLowerCase();
-        const text = `${t.jobNo} ${t.tripNo} ${t.consigneeShipper} ${t.deliveryName} ${t.pickUpName} ${t.truckTypeRaw}`.toLowerCase();
+        const text = `${t.jobNo} ${t.tripNo} ${t.consigneeShipper} ${t.deliveryName} ${t.pickUpName} ${t.truckTypeRaw} ${t.branch} ${t.odType}`.toLowerCase();
         if (!text.includes(q)) return false;
       }
 
       return true;
     });
-  }, [trips, filterCompany, filterTruckType, filterZone, filterStatus, searchKeyword]);
+  }, [trips, filterCompany, filterBranch, filterTruckType, filterODType, filterDiff, filterZone, filterStatus, searchKeyword]);
 
-  // Computed summary for filtered set
+  // Computed summary for filtered set using official multi-metric calculation
   const filteredSummary: BillingReportSummary = useMemo(() => {
-    const types: StandardTruckType[] = ['4W', '6W', '10W'];
-    let grandTotalCount = 0;
-    let grandTotalAmount = 0;
+    return computeBillingSummary(filteredTrips);
+  }, [filteredTrips]);
 
-    const summaries: TruckSummary[] = types.map((t) => {
-      const matching = filteredTrips.filter((trip) => trip.standardTruckType === t);
-      const count = matching.length;
-      const totalAmount = matching.reduce((sum, item) => sum + (item.standardTripRate || 0), 0);
-      grandTotalCount += count;
-      grandTotalAmount += totalAmount;
-      return {
-        truckType: t,
-        count,
-        totalAmount,
+  // Calculation by Delivery Zone ("คำนวน แต่ละโซน และรถแต่ละประเภทด้วย")
+  const zoneSummaries = useMemo(() => {
+    const map = new Map<string, {
+      zone: string;
+      province: string;
+      count4W: number;
+      count6W: number;
+      count10W: number;
+      totalCount: number;
+      baseAmount: number;
+      fuelAmount: number;
+      otherAmount: number;
+      totalAmount: number;
+    }>();
+
+    filteredTrips.forEach((t) => {
+      const zoneKey = t.zoneLocationMatch || t.deliveryDistrict || 'ไม่ระบุ';
+      const existing = map.get(zoneKey) || {
+        zone: zoneKey,
+        province: t.deliveryProvince || '-',
+        count4W: 0,
+        count6W: 0,
+        count10W: 0,
+        totalCount: 0,
+        baseAmount: 0,
+        fuelAmount: 0,
+        otherAmount: 0,
+        totalAmount: 0,
       };
+
+      if (t.standardTruckType === '4W') existing.count4W++;
+      else if (t.standardTruckType === '6W') existing.count6W++;
+      else if (t.standardTruckType === '10W') existing.count10W++;
+
+      existing.totalCount++;
+      existing.baseAmount += t.baseTripRate || 0;
+      existing.fuelAmount += t.fuelSurcharge || 0;
+      existing.otherAmount += (t.dropFee + t.waitingFee + t.tollFee + t.porterFee + t.otherFees) || 0;
+      existing.totalAmount += t.totalAmount || 0;
+
+      map.set(zoneKey, existing);
     });
 
-    summaries.push({
-      truckType: 'รวมทั้งหมด',
-      count: grandTotalCount,
-      totalAmount: grandTotalAmount,
-    });
-
-    return {
-      summaries,
-      grandTotalCount,
-      grandTotalAmount,
-    };
+    return Array.from(map.values()).sort((a, b) => b.totalAmount - a.totalAmount);
   }, [filteredTrips]);
 
   const handleResetFilters = () => {
     setFilterStartDate('');
     setFilterEndDate('');
     setFilterCompany('ALL');
+    setFilterBranch('ALL');
     setFilterTruckType('ALL');
+    setFilterODType('ALL');
+    setFilterDiff('ALL');
     setFilterZone('ALL');
     setFilterStatus('ALL');
     setSearchKeyword('');
@@ -163,8 +287,9 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
   };
 
   // Pagination calculation
-  const totalPages = Math.ceil(filteredTrips.length / pageSize) || 1;
-  const paginatedTrips = filteredTrips.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const isShowAll = pageSize >= 999999;
+  const totalPages = isShowAll ? 1 : Math.ceil(filteredTrips.length / pageSize) || 1;
+  const paginatedTrips = isShowAll ? filteredTrips : filteredTrips.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="space-y-6">
@@ -187,10 +312,80 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center flex-wrap gap-2">
+          {/* Navigate to Diff Check */}
+          {onNavigateToReconciliation && (
+            <button
+              onClick={onNavigateToReconciliation}
+              className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
+              title="ไปยังหน้าจอ Diff Check (เทียบราคาสาขา & ตรวจสอบทริป)"
+            >
+              <Scale className="w-4 h-4 text-emerald-200" />
+              <span>Diff Check (เทียบราคาสาขา)</span>
+            </button>
+          )}
+
+          {/* Download 69-Col Template */}
+          <button
+            onClick={() => downloadRawData69TemplateExcel()}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
+            title="ดาวน์โหลดแม่แบบ Excel สำหรับกรอกข้อมูล 69 คอลัมน์ (AW=Truck Type)"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Template 69 คอลัมน์</span>
+          </button>
+
+          {/* Clear all trips to 0 */}
+          {onClearTrips && (
+            <button
+              onClick={onClearTrips}
+              className="px-3 py-2 border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
+              title="ล้างข้อมูลดิบ / เที่ยวรถทั้งหมดให้เป็น 0 รายการ (เคลียร์ LocalStorage)"
+            >
+              <Trash2 className="w-4 h-4 text-rose-500" />
+              <span>ล้างข้อมูลดิบ (เป็น 0)</span>
+            </button>
+          )}
+
+          {/* Upload Quotation AI OCR Button */}
+          {onOpenQuotationUpload && (
+            <button
+              onClick={onOpenQuotationUpload}
+              className="px-3.5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all"
+              title="อัปโหลดใบเสนอราคา (PDF / Excel / รูปภาพ) และสกัดข้อมูลด้วย AI OCR"
+            >
+              <Sparkles className="w-4 h-4 text-amber-300" />
+              <span>ใบเสนอราคา (AI OCR)</span>
+            </button>
+          )}
+
+          {/* Add New Trip Button */}
+          {onAddNewTrip && (
+            <button
+              onClick={() => setIsAddModalOpen(true)}
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
+              title="เพิ่มเที่ยวรถใหม่เข้าสู่ระบบ"
+            >
+              <Plus className="w-4 h-4" />
+              <span>เพิ่มเที่ยวรถ</span>
+            </button>
+          )}
+
+          {/* Simulate Full Month Button */}
+          {onSimulateFullMonthTrips && (
+            <button
+              onClick={onSimulateFullMonthTrips}
+              className="px-3.5 py-2 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all"
+              title="โหลดชุดข้อมูลจำลองปิดรอบเดือน 9 เพื่อดูยอดจริง บางบ่อ ฿3.78M / นวนคร ฿507k"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>จำลองปิดรอบเดือน 9 (บางบ่อ 3.78M / นวนคร 507k)</span>
+            </button>
+          )}
+
           {/* Export Excel */}
           <button
             onClick={handleExportExcel}
-            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors"
+            className="px-3.5 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors"
             title="ดาวน์โหลดไฟล์ Excel (.xlsx) ผ่าน SheetJS"
           >
             <FileSpreadsheet className="w-4 h-4" />
@@ -328,7 +523,7 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 text-xs">
           {/* Keyword Search */}
           <div className="space-y-1">
             <label className="text-slate-500 dark:text-slate-400 text-[11px] font-medium">
@@ -370,6 +565,25 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
             </select>
           </div>
 
+          {/* Branch (สาขา) */}
+          <div className="space-y-1">
+            <label className="text-slate-500 dark:text-slate-400 text-[11px] font-medium">
+              สาขา (Branch):
+            </label>
+            <select
+              value={filterBranch}
+              onChange={(e) => {
+                setFilterBranch(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white focus:outline-hidden focus:border-blue-500 text-xs"
+            >
+              <option value="ALL">ทุกสาขา (นวนคร + บางบ่อ)</option>
+              <option value="นวนคร">สาขานวนคร (NLC)</option>
+              <option value="บางบ่อ">สาขาบางบ่อ (BBO)</option>
+            </select>
+          </div>
+
           {/* Truck Type */}
           <div className="space-y-1">
             <label className="text-slate-500 dark:text-slate-400 text-[11px] font-medium">
@@ -390,24 +604,44 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
             </select>
           </div>
 
-          {/* Zone / Location Match */}
+          {/* OD Type (รถซับ Sub Contractor) */}
           <div className="space-y-1">
             <label className="text-slate-500 dark:text-slate-400 text-[11px] font-medium">
-              โซนปลายทาง (Zone Match):
+              ประเภทรถซับ (OD Type):
             </label>
             <select
-              value={filterZone}
+              value={filterODType}
               onChange={(e) => {
-                setFilterZone(e.target.value);
+                setFilterODType(e.target.value);
                 setCurrentPage(1);
               }}
               className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white focus:outline-hidden focus:border-blue-500 text-xs"
             >
-              {zoneOptions.map((z) => (
-                <option key={z} value={z}>
-                  {z === 'ALL' ? 'ทุกโซน (ทั้งหมด)' : z}
-                </option>
-              ))}
+              <option value="ALL">รถทุกกลุ่ม (บริษัท + ซับ)</option>
+              <option value="Company Truck">รถบริษัท (Company Truck)</option>
+              <option value="OD 4">OD 4 (รถซับ 4 ล้อ)</option>
+              <option value="OD 6">OD 6 (รถซับ 6 ล้อ)</option>
+              <option value="OD 10">OD 10 (รถซับ 10 ล้อ)</option>
+            </select>
+          </div>
+
+          {/* Diff Reconciliation Filter */}
+          <div className="space-y-1">
+            <label className="text-slate-500 dark:text-slate-400 text-[11px] font-medium">
+              ตรวจสอบส่วนต่าง (Diff):
+            </label>
+            <select
+              value={filterDiff}
+              onChange={(e) => {
+                setFilterDiff(e.target.value as any);
+                setCurrentPage(1);
+              }}
+              className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white focus:outline-hidden focus:border-blue-500 text-xs"
+            >
+              <option value="ALL">แสดงทุกรายการ</option>
+              <option value="Match">✅ ตรงกัน (Match 100%)</option>
+              <option value="MinorDiff">⚠️ ต่างเล็กน้อย (Diff &lt; 5%)</option>
+              <option value="MajorDiff">❌ ต่างมาก (Diff &ge; 5%)</option>
             </select>
           </div>
 
@@ -433,75 +667,213 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
         </div>
       </div>
 
-      {/* Summary Card: AUTOMATED TRANSPORTATION BILLING REPORT */}
-      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden">
-        <div className="bg-slate-50 dark:bg-slate-700/60 px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Truck className="w-4 h-4 text-blue-600" />
-            <h3 className="text-xs font-bold text-slate-800 dark:text-white uppercase tracking-wider">
-              ตารางสรุปยอดค่าขนส่ง (Billing Summary)
-            </h3>
+      {/* Summary Section: Layout 8 as Requested */}
+      <div className="space-y-4">
+        {/* Table Summary per truck type matching exact brief */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden">
+          <div className="bg-slate-50 dark:bg-slate-700/60 px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Truck className="w-4 h-4 text-blue-600" />
+              <h3 className="text-xs font-bold text-slate-800 dark:text-white uppercase tracking-wider">
+                AUTOMATED TRANSPORTATION BILLING REPORT SUMMARY
+              </h3>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              {onSelectDieselMethod ? (
+                <div className="flex items-center bg-slate-200 dark:bg-slate-700/80 rounded-lg p-0.5 text-[11px]">
+                  <button
+                    onClick={() => onSelectDieselMethod('monthly_avg')}
+                    className={`px-2.5 py-1 rounded font-bold transition-all ${
+                      dieselMethod === 'monthly_avg'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                    title="คำนวณตามราคาดีเซลเฉลี่ยทั้งเดือน (Monthly Average - มาตรฐาน ปตท.)"
+                  >
+                    ★ เฉลี่ยทั้งเดือน (Monthly Avg)
+                  </button>
+                  <button
+                    onClick={() => onSelectDieselMethod('daily_spot')}
+                    className={`px-2.5 py-1 rounded font-bold transition-all ${
+                      dieselMethod === 'daily_spot'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                    title="คำนวณตามราคา ณ วันที่เที่ยวรถ (Issue Date)"
+                  >
+                    ราคา ณ วันที่ (Daily Spot)
+                  </button>
+                </div>
+              ) : (
+                <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200 font-semibold text-[11px]">
+                  ราคาน้ำมัน: ดีเซลเฉลี่ยรายเดือน (Monthly Avg)
+                </span>
+              )}
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                หน่วย: บาท (THB)
+              </span>
+            </div>
           </div>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400">
-            หน่วย: บาท (THB)
-          </span>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-slate-100/70 dark:bg-slate-700/40 text-slate-700 dark:text-slate-200 font-semibold border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th className="py-2.5 px-6">ประเภทรถ</th>
+                  <th className="py-2.5 px-6 text-center">จำนวน (คัน)</th>
+                  <th className="py-2.5 px-6 text-right">ราคาเรท</th>
+                  <th className="py-2.5 px-6 text-right">ค่าน้ำมัน</th>
+                  <th className="py-2.5 px-6 text-right">ค่าอื่นๆ</th>
+                  <th className="py-2.5 px-6 text-right font-bold text-blue-600 dark:text-blue-400">รวม (THB)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-700 text-slate-700 dark:text-slate-300">
+                {filteredSummary.summaries.map((row, idx) => {
+                  const isGrandTotal = row.truckType === 'รวมทั้งหมด';
+                  return (
+                    <tr
+                      key={idx}
+                      className={`transition-colors ${
+                        isGrandTotal
+                          ? 'bg-blue-50/70 dark:bg-blue-950/40 font-bold text-slate-900 dark:text-white text-xs'
+                          : 'hover:bg-slate-50 dark:hover:bg-slate-700/40'
+                      }`}
+                    >
+                      <td className="py-2.5 px-6 font-semibold">
+                        {row.truckType === '4W' && '4W (รถ 4 ล้อ)'}
+                        {row.truckType === '6W' && '6W (รถ 6 ล้อ)'}
+                        {row.truckType === '10W' && '10W (รถ 10 ล้อ)'}
+                        {isGrandTotal && 'รวม'}
+                      </td>
+                      <td className="py-2.5 px-6 text-center font-mono">
+                        {row.count}
+                      </td>
+                      <td className="py-2.5 px-6 text-right font-mono">
+                        {row.baseRateAmount > 0
+                          ? row.baseRateAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })
+                          : '-'}
+                      </td>
+                      <td className="py-2.5 px-6 text-right font-mono">
+                        {row.fuelSurchargeAmount > 0
+                          ? row.fuelSurchargeAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })
+                          : '-'}
+                      </td>
+                      <td className="py-2.5 px-6 text-right font-mono">
+                        {row.otherFeesAmount > 0
+                          ? row.otherFeesAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })
+                          : '-'}
+                      </td>
+                      <td className="py-2.5 px-6 text-right font-mono font-bold text-blue-600 dark:text-blue-400">
+                        {row.totalAmount > 0
+                          ? `฿${row.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}`
+                          : '-'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-slate-100/70 dark:bg-slate-700/40 text-slate-700 dark:text-slate-200 font-semibold border-b border-slate-200 dark:border-slate-700">
-              <tr>
-                <th className="py-2.5 px-6">ประเภทรถ</th>
-                <th className="py-2.5 px-6 text-center">จำนวน (คัน)</th>
-                <th className="py-2.5 px-6 text-right">Total Summary Amount (THB)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-700 text-slate-700 dark:text-slate-300">
-              {filteredSummary.summaries.map((row, idx) => {
-                const isGrandTotal = row.truckType === 'รวมทั้งหมด';
-                return (
-                  <tr
-                    key={idx}
-                    className={`transition-colors ${
-                      isGrandTotal
-                        ? 'bg-blue-50/60 dark:bg-blue-950/40 font-bold text-slate-900 dark:text-white'
-                        : 'hover:bg-slate-50 dark:hover:bg-slate-700/40'
-                    }`}
-                  >
-                    <td className="py-2.5 px-6">
-                      {row.truckType === '4W' && 'รถ 4 ล้อ'}
-                      {row.truckType === '6W' && 'รถ 6 ล้อ'}
-                      {row.truckType === '10W' && 'รถ 10 ล้อ'}
-                      {isGrandTotal && 'รวมทั้งหมด'}
-                    </td>
-                    <td className="py-2.5 px-6 text-center font-mono">
-                      {isGrandTotal ? row.count.toFixed(2) : row.count}
-                    </td>
-                    <td className="py-2.5 px-6 text-right font-mono font-semibold">
-                      {row.totalAmount > 0
-                        ? row.totalAmount.toLocaleString('th-TH', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })
-                        : '-'}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        {/* Breakdown Mini-Cards: Branches, Sub-Contractor OD, and Price Reconciliation */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          {/* 1. Branch Summary */}
+          <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-2.5">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-700">
+              <span className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                🏢 แยกตามสาขา (Branches)
+              </span>
+              <span className="text-[10px] text-slate-400">นวนคร & บางบ่อ</span>
+            </div>
+            {filteredSummary.branchSummaries.map((b) => (
+              <div key={b.branch} className="flex items-center justify-between py-1">
+                <span className="font-medium text-slate-700 dark:text-slate-300">
+                  สาขา{b.branch}:
+                </span>
+                <div className="text-right">
+                  <span className="font-mono font-bold text-slate-900 dark:text-white">
+                    ฿{b.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-[10px] text-slate-400 ml-1.5">({b.count} เที่ยว)</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* 2. Sub Contractor OD Summary */}
+          <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-2.5">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-700">
+              <span className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                🚚 รถบริษัท vs รถซับ (OD)
+              </span>
+              <span className="text-[10px] text-slate-400">Company vs Sub</span>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="font-medium text-slate-700 dark:text-slate-300">รถบริษัท (Company):</span>
+              <div className="text-right">
+                <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                  ฿{filteredSummary.companyTruckAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                </span>
+                <span className="text-[10px] text-slate-400 ml-1.5">({filteredSummary.companyTruckCount} เที่ยว)</span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="font-medium text-slate-700 dark:text-slate-300">รถซับ (Sub OD):</span>
+              <div className="text-right">
+                <span className="font-mono font-bold text-amber-600 dark:text-amber-400">
+                  ฿{filteredSummary.subContractorAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                </span>
+                <span className="text-[10px] text-slate-400 ml-1.5">({filteredSummary.subContractorCount} เที่ยว)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Price Reconciliation (Diff Status) */}
+          <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-2.5">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-700">
+              <span className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                ⚖️ เช็ค Diff อัตโนมัติ (Reconciliation)
+              </span>
+              <span className="text-[10px] text-slate-400">vs ลูกค้า</span>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
+                ✅ ตรงกัน (Match):
+              </span>
+              <span className="font-mono font-bold text-emerald-700 dark:text-emerald-300">
+                {filteredSummary.diffSummary.matchCount} เที่ยว
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                ⚠️ ต่างเล็กน้อย (&lt;5%):
+              </span>
+              <span className="font-mono font-bold text-amber-700 dark:text-amber-300">
+                {filteredSummary.diffSummary.minorDiffCount} เที่ยว
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="text-rose-700 dark:text-rose-300 flex items-center gap-1">
+                ❌ ต่างมาก (&ge;5%):
+              </span>
+              <span className="font-mono font-bold text-rose-700 dark:text-rose-300">
+                {filteredSummary.diffSummary.majorDiffCount} เที่ยว
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Detail Table: 19 Columns as Requested */}
+      {/* Detail Table: 24 Columns as Requested */}
       <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xs overflow-hidden space-y-3">
         <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-bold text-slate-800 dark:text-white">
-              ตารางรายละเอียดค่าขนส่ง (Detailed Trips Breakdown)
+              ตารางรายละเอียดค่าขนส่ง (Detailed Trips Breakdown & Diff Reconciliation)
             </h3>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              คลิกหรือดับเบิ้ลคลิกที่ช่อง <strong>Standard Trip Rate</strong> เพื่อแก้ไขราคาแบบเจาะจงได้ทันที
+              แสดงรายละเอียดแยกตาม สาขา, รถซับ OD, ค่าน้ำมัน, ค่าดรอป, ค่ารอ, ค่าทางด่วน, ค่าคนยก, และส่วนต่าง vs ราคาลูกค้า
             </p>
           </div>
 
@@ -518,31 +890,79 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
                 <th className="py-2.5 px-3">Issue Date</th>
                 <th className="py-2.5 px-3">Job No.</th>
                 <th className="py-2.5 px-3">Trip No.</th>
+                <th className="py-2.5 px-3">Branch (สาขา)</th>
+                <th className="py-2.5 px-3">OD Type</th>
                 <th className="py-2.5 px-3">Consignee/Shipper</th>
                 <th className="py-2.5 px-3">Pick Up Name</th>
-                <th className="py-2.5 px-3">Pick Up Province</th>
                 <th className="py-2.5 px-3">Delivery Name</th>
-                <th className="py-2.5 px-3">Delivery District</th>
-                <th className="py-2.5 px-3">Zone/Location Match</th>
-                <th className="py-2.5 px-3">Truck Type (Raw)</th>
-                <th className="py-2.5 px-3">Backhaul</th>
-                <th className="py-2.5 px-3">HaulType</th>
+                <th className="py-2.5 px-3">Zone Match</th>
+                <th className="py-2.5 px-3">Truck Type</th>
+                <th className="py-2.5 px-3 text-right">ราคาเรท (Base) ✎</th>
+                <th className="py-2.5 px-3 text-right">ค่าน้ำมัน (Fuel)</th>
+                <th className="py-2.5 px-3 text-right">ค่าดรอป (Drop)</th>
+                <th className="py-2.5 px-3 text-right">ค่ารอ (Wait)</th>
+                <th className="py-2.5 px-3 text-right">ทางด่วน (Toll)</th>
+                <th className="py-2.5 px-3 text-right">Porter (คนยก)</th>
+                <th className="py-2.5 px-3 text-right">ค่าอื่นๆ (Other)</th>
                 <th className="py-2.5 px-3 text-right font-bold text-blue-600 dark:text-blue-400">
-                  Standard Trip Rate (THB) ✎
+                  Total Amount (ราคารวม)
                 </th>
-                <th className="py-2.5 px-3 text-right">Porter/other not in GTT</th>
-                <th className="py-2.5 px-3 text-right">Console not in GTT</th>
-                <th className="py-2.5 px-3 text-right">Cancelled trips in GTT</th>
-                <th className="py-2.5 px-3 text-center">Missing-price trips</th>
-                <th className="py-2.5 px-3 text-right">Diesel rate (THB/L)</th>
-                <th className="py-2.5 px-3 text-center">Review status</th>
+                <th className="py-2.5 px-3 text-right font-medium text-slate-600 dark:text-slate-400">
+                  ราคาลูกค้า (Quoted)
+                </th>
+                <th className="py-2.5 px-3 text-center">Diff (ส่วนต่าง)</th>
+                <th className="py-2.5 px-3">เหตุผลที่ต่าง (Diff Reason)</th>
+                <th className="py-2.5 px-3 text-center">สถานะ</th>
+                <th className="py-2.5 px-3 text-center">จัดการ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60 text-slate-700 dark:text-slate-300">
               {paginatedTrips.length === 0 ? (
                 <tr>
-                  <td colSpan={20} className="py-8 text-center text-slate-400">
-                    ไม่พบรายการเที่ยวขนส่งที่ตรงกับเงื่อนไขการค้นหา
+                  <td colSpan={24} className="py-12 text-center">
+                    {trips.length === 0 ? (
+                      <div className="max-w-md mx-auto space-y-3">
+                        <div className="w-12 h-12 mx-auto rounded-full bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                          <Truck className="w-6 h-6" />
+                        </div>
+                        <h4 className="font-bold text-slate-800 dark:text-white text-sm">
+                          ข้อมูลเที่ยวรถปัจจุบันเป็น 0 รายการ
+                        </h4>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                          ระบบเคลียร์ข้อมูล Data mock เป็น 0 เรียบร้อย พร้อมสำหรับการนำเข้าไฟล์งานจริง Daily Raw Data (69 คอลัมน์ / AW=Truck Type)
+                        </p>
+                        <div className="flex items-center justify-center flex-wrap gap-2 pt-2">
+                          <button
+                            onClick={() => downloadRawData69TemplateExcel()}
+                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
+                          >
+                            <FileSpreadsheet className="w-4 h-4" />
+                            <span>ดาวน์โหลด Template 69 คอลัมน์</span>
+                          </button>
+                          {onSimulateFullMonthTrips && (
+                            <button
+                              onClick={onSimulateFullMonthTrips}
+                              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
+                            >
+                              <Sparkles className="w-4 h-4" />
+                              <span>ทดสอบโหลดรอบเดือน 9 (3.78M / 507k)</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-slate-400 text-xs">
+                          ไม่พบรายการเที่ยวขนส่งที่ตรงกับเงื่อนไขการค้นหา
+                        </p>
+                        <button
+                          onClick={handleResetFilters}
+                          className="px-3 py-1 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-blue-600 dark:text-blue-400 text-xs font-semibold rounded-md"
+                        >
+                          ล้างตัวกรอง
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ) : (
@@ -567,30 +987,50 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
                       <td className="py-2 px-3 font-mono text-blue-600 dark:text-blue-400">
                         {trip.tripNo}
                       </td>
-                      <td className="py-2 px-3 max-w-[200px] truncate" title={trip.consigneeShipper}>
+                      {/* Branch Badge */}
+                      <td className="py-2 px-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            trip.branch === 'บางบ่อ'
+                              ? 'bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300'
+                              : 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300'
+                          }`}
+                        >
+                          {trip.branch}
+                        </span>
+                      </td>
+                      {/* OD Type Badge */}
+                      <td className="py-2 px-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                            trip.isSubContractor
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                              : 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          {trip.odType}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 max-w-[180px] truncate" title={trip.consigneeShipper}>
                         {trip.consigneeShipper}
                       </td>
-                      <td className="py-2 px-3 max-w-[180px] truncate" title={trip.pickUpName}>
+                      <td className="py-2 px-3 max-w-[150px] truncate" title={trip.pickUpName}>
                         {trip.pickUpName}
                       </td>
-                      <td className="py-2 px-3">{trip.pickUpProvince}</td>
-                      <td className="py-2 px-3 max-w-[200px] truncate" title={trip.deliveryName}>
+                      <td className="py-2 px-3 max-w-[180px] truncate" title={trip.deliveryName}>
                         {trip.deliveryName}
                       </td>
-                      <td className="py-2 px-3">{trip.deliveryDistrict}</td>
                       <td className="py-2 px-3 font-semibold text-slate-800 dark:text-white">
                         {trip.zoneLocationMatch}
                       </td>
                       <td className="py-2 px-3">
                         <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200">
-                          {trip.truckTypeRaw}
+                          {trip.standardTruckType}
                         </span>
                       </td>
-                      <td className="py-2 px-3">{trip.backhaul}</td>
-                      <td className="py-2 px-3">{trip.haulType}</td>
 
-                      {/* Standard Trip Rate with Inline Editor */}
-                      <td className="py-2 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
+                      {/* Base Rate with Inline Editor */}
+                      <td className="py-2 px-3 text-right font-mono font-semibold">
                         {isEditingThis ? (
                           <div className="flex items-center justify-end gap-1">
                             <input
@@ -615,42 +1055,88 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
                           <span
                             onClick={() => {
                               setEditingTripId(trip.id);
-                              setEditRateValue(String(trip.standardTripRate || ''));
+                              setEditRateValue(String(trip.baseTripRate || ''));
                             }}
                             className={`cursor-pointer group flex items-center justify-end gap-1 hover:underline ${
-                              trip.standardTripRate === 0
+                              trip.baseTripRate === 0
                                 ? 'text-rose-600 dark:text-rose-400 font-bold'
                                 : 'text-slate-900 dark:text-white'
                             }`}
-                            title="คลิกเพื่อแก้ไขตัวเลขราคานี้"
+                            title="คลิกเพื่อแก้ไขราคาเรทฐาน"
                           >
                             <span>
-                              {trip.standardTripRate > 0
-                                ? trip.standardTripRate.toLocaleString('th-TH', { minimumFractionDigits: 2 })
-                                : '0.00 (คลิกใส่ราคา)'}
+                              {trip.baseTripRate > 0
+                                ? trip.baseTripRate.toLocaleString('th-TH', { minimumFractionDigits: 2 })
+                                : '0.00'}
                             </span>
                             <Edit2 className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                           </span>
                         )}
                       </td>
 
+                      {/* Fuel Surcharge */}
+                      <td className="py-2 px-3 text-right font-mono text-amber-600 dark:text-amber-400">
+                        {trip.fuelSurcharge > 0 ? trip.fuelSurcharge.toLocaleString('th-TH', { minimumFractionDigits: 2 }) : '-'}
+                      </td>
+
+                      {/* Drop Fee */}
                       <td className="py-2 px-3 text-right font-mono">
-                        {trip.porterOther > 0 ? trip.porterOther.toLocaleString() : '-'}
+                        {trip.dropFee > 0 ? trip.dropFee.toLocaleString() : '-'}
                       </td>
+
+                      {/* Waiting Fee */}
                       <td className="py-2 px-3 text-right font-mono">
-                        {trip.consoleNotInGTT > 0 ? trip.consoleNotInGTT.toLocaleString() : '-'}
+                        {trip.waitingFee > 0 ? trip.waitingFee.toLocaleString() : '-'}
                       </td>
-                      <td className="py-2 px-3 text-right font-mono text-rose-500">
-                        {trip.cancelledTripsInGTT > 0
-                          ? `(${trip.cancelledTripsInGTT.toLocaleString()})`
-                          : '-'}
+
+                      {/* Toll Fee */}
+                      <td className="py-2 px-3 text-right font-mono">
+                        {trip.tollFee > 0 ? trip.tollFee.toLocaleString() : '-'}
                       </td>
+
+                      {/* Porter Fee */}
+                      <td className="py-2 px-3 text-right font-mono">
+                        {trip.porterFee > 0 ? trip.porterFee.toLocaleString() : '-'}
+                      </td>
+
+                      {/* Other Fees */}
+                      <td className="py-2 px-3 text-right font-mono">
+                        {trip.otherFees > 0 ? trip.otherFees.toLocaleString() : '-'}
+                      </td>
+
+                      {/* Total Amount */}
+                      <td className="py-2 px-3 text-right font-mono font-bold text-blue-600 dark:text-blue-400 text-xs">
+                        ฿{trip.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                      </td>
+
+                      {/* Customer Quoted */}
+                      <td className="py-2 px-3 text-right font-mono text-slate-600 dark:text-slate-400">
+                        ฿{trip.customerQuotedPrice.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                      </td>
+
+                      {/* Diff Badge */}
                       <td className="py-2 px-3 text-center font-mono">
-                        {trip.missingPriceTrips > 0 ? trip.missingPriceTrips : '-'}
+                        {trip.diffStatus === 'Match' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300">
+                            0.00 (Match)
+                          </span>
+                        ) : trip.diffStatus === 'MinorDiff' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
+                            {trip.diffAmount > 0 ? '+' : ''}{trip.diffAmount.toFixed(0)} ฿ ({trip.diffPercent.toFixed(1)}%)
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300">
+                            {trip.diffAmount > 0 ? '+' : ''}{trip.diffAmount.toFixed(0)} ฿ ({trip.diffPercent.toFixed(1)}%)
+                          </span>
+                        )}
                       </td>
-                      <td className="py-2 px-3 text-right font-mono text-amber-600 dark:text-amber-400 font-semibold">
-                        {trip.dieselRate ? trip.dieselRate.toFixed(2) : '-'}
+
+                      {/* Diff Reason */}
+                      <td className="py-2 px-3 max-w-[200px] truncate text-[11px]" title={trip.diffReason}>
+                        <span className="text-slate-600 dark:text-slate-300">{trip.diffReason}</span>
                       </td>
+
+                      {/* Review status */}
                       <td className="py-2 px-3 text-center">
                         {isSuccess && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300">
@@ -659,14 +1145,39 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
                         )}
                         {isZoneWarn && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300">
-                            <AlertTriangle className="w-3 h-3" /> ตรวจโซนปลายทาง
+                            <AlertTriangle className="w-3 h-3" /> ตรวจโซน
                           </span>
                         )}
                         {!isSuccess && !isZoneWarn && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300">
-                            <XCircle className="w-3 h-3" /> ไม่มีราคาน้ำมัน
+                            <XCircle className="w-3 h-3" /> ไม่มีราคา
                           </span>
                         )}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="py-2 px-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              setEditingTripId(trip.id);
+                              setEditRateValue(String(trip.standardTripRate || ''));
+                            }}
+                            className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                            title="แก้ไขราคาเที่ยวนี้"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          {onDeleteTrip && (
+                            <button
+                              onClick={() => onDeleteTrip(trip.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors"
+                              title="ลบเที่ยวรถนี้"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -715,6 +1226,151 @@ export const BillingReportPage: React.FC<BillingReportPageProps> = ({
           </div>
         )}
       </div>
+
+      {/* Add New Trip Modal */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl max-w-lg w-full shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <div className="p-4 bg-gradient-to-r from-blue-700 to-indigo-700 text-white flex items-center justify-between">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Plus className="w-4 h-4" />
+                เพิ่มเที่ยวขนส่งใหม่ (Add Trip Record)
+              </h3>
+              <button
+                onClick={() => setIsAddModalOpen(false)}
+                className="p-1 text-white/80 hover:text-white rounded-lg hover:bg-white/10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    Job No. *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="เช่น GTT-D260930999"
+                    value={newJobNo}
+                    onChange={(e) => setNewJobNo(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    Trip No.
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="เช่น TRP-GTTD260930999"
+                    value={newTripNo}
+                    onChange={(e) => setNewTripNo(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    Issue Date *
+                  </label>
+                  <input
+                    type="text"
+                    value={newIssueDate}
+                    onChange={(e) => setNewIssueDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    ประเภทรถ (Truck Type) *
+                  </label>
+                  <select
+                    value={newTruckType}
+                    onChange={(e) => setNewTruckType(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white"
+                  >
+                    <option value="4W/Single Unit">4W/Single Unit (รถ 4 ล้อ)</option>
+                    <option value="6W/Single Unit">6W/Single Unit (รถ 6 ล้อ)</option>
+                    <option value="10W/Single Unit">10W/Single Unit (รถ 10 ล้อ)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  บริษัทลูกค้า (Consignee/Shipper)
+                </label>
+                <input
+                  type="text"
+                  value={newCompany}
+                  onChange={(e) => setNewCompany(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    อำเภอปลายทาง (District)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="เช่น ศรีมหาโพธิ / พระพุทธบาท"
+                    value={newDelivDistrict}
+                    onChange={(e) => setNewDelivDistrict(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                    จังหวัดปลายทาง (Province)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="เช่น ปราจีนบุรี / สระบุรี"
+                    value={newDelivProvince}
+                    onChange={(e) => setNewDelivProvince(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                  Standard Trip Rate (THB)
+                </label>
+                <input
+                  type="number"
+                  placeholder="เช่น 3280"
+                  value={newStandardRate}
+                  onChange={(e) => setNewStandardRate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-mono font-bold text-blue-600"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-2">
+              <button
+                onClick={() => setIsAddModalOpen(false)}
+                className="px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-700 dark:text-slate-300 text-xs hover:bg-slate-100"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={handleSaveNewTrip}
+                disabled={!newJobNo.trim()}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs disabled:opacity-40"
+              >
+                บันทึกเที่ยวรถใหม่
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

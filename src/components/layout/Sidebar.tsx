@@ -8,9 +8,21 @@ import {
   Truck,
   HardDrive,
   CheckCircle,
+  FileText,
+  Scale,
+  BookOpen,
+  Database,
 } from 'lucide-react';
 
-export type PageTab = 'dashboard' | 'import' | 'billing' | 'master' | 'reports';
+export type PageTab =
+  | 'dashboard'
+  | 'billing'
+  | 'reconciliation'
+  | 'quotation'
+  | 'import'
+  | 'reports'
+  | 'master'
+  | 'manual';
 
 interface SidebarProps {
   currentTab: PageTab;
@@ -18,6 +30,7 @@ interface SidebarProps {
   isOpen: boolean;
   totalTripsCount: number;
   totalAmountSum: number;
+  onOpenSupabaseModal?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -25,8 +38,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setCurrentTab,
   isOpen,
   totalTripsCount,
+  onOpenSupabaseModal,
 }) => {
-  const navItems: { id: PageTab; label: string; icon: React.ReactNode; badge?: string }[] = [
+  const navItems: { id: PageTab; label: string; icon: React.ReactNode; badge?: string; badgeColor?: string }[] = [
     {
       id: 'dashboard',
       label: 'แดชบอร์ด (Dashboard)',
@@ -37,6 +51,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'รายงานค่าขนส่ง (Billing Report)',
       icon: <Receipt className="w-5 h-5" />,
       badge: `${totalTripsCount}`,
+    },
+    {
+      id: 'reconciliation',
+      label: 'Diff Check (เทียบราคาสาขา)',
+      icon: <Scale className="w-5 h-5 text-emerald-400" />,
+      badge: 'Diff Check',
+      badgeColor: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+    },
+    {
+      id: 'quotation',
+      label: 'ใบเสนอราคา & AI OCR',
+      icon: <FileText className="w-5 h-5 text-purple-400" />,
+      badge: 'AI OCR',
+      badgeColor: 'bg-purple-500/20 text-purple-300 border border-purple-500/30',
     },
     {
       id: 'import',
@@ -50,8 +78,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'master',
-      label: 'ข้อมูลหลัก (Master Data)',
+      label: 'ข้อมูลหลัก & ตั้งค่า (Master Data)',
       icon: <Settings className="w-5 h-5" />,
+    },
+    {
+      id: 'manual',
+      label: 'คู่มือการใช้งานระบบ (User Manual)',
+      icon: <BookOpen className="w-5 h-5 text-amber-400" />,
+      badge: 'ละเอียด',
+      badgeColor: 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
     },
   ];
 
@@ -113,7 +148,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {item.badge && (
                   <span
                     className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                      isActive ? 'bg-white/20 text-white' : 'bg-slate-700 text-slate-300'
+                      isActive ? 'bg-white/20 text-white' : item.badgeColor || 'bg-slate-700 text-slate-300'
                     }`}
                   >
                     {item.badge}
@@ -124,7 +159,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })}
 
           <div className="pt-4 px-3 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Workspace Integrations
+            Cloud Integrations
+          </div>
+
+          {/* Supabase Cloud Card */}
+          <div
+            onClick={onOpenSupabaseModal}
+            className="px-3 py-2.5 rounded-lg bg-emerald-950/40 border border-emerald-800/60 text-[11px] text-emerald-200 space-y-1.5 cursor-pointer hover:bg-emerald-900/40 transition-all group"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 font-bold text-emerald-300">
+                <Database className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" />
+                <span>Supabase Cloud DB</span>
+              </div>
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono font-bold">
+                Online
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-400 leading-tight">
+              PostgreSQL Cloud ซิงค์ข้อมูลเที่ยวรถ & Master Data ไม่จำกัด
+            </p>
           </div>
 
           <div className="px-3 py-2.5 rounded-lg bg-slate-800/50 border border-slate-700/50 text-[11px] text-slate-300 space-y-2">
